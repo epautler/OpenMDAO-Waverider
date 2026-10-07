@@ -1,11 +1,14 @@
-
 import numpy as np
+
 from openaerostruct.integration.aerostruct_groups import AerostructGeometry, AerostructPoint
 from openaerostruct.utils.constants import grav_constant
+
 import openmdao.api as om
+
 import matplotlib.pyplot as plt
 
 def cst_mesh(num_x=7, num_y=15, L=1.0):
+    """Half-span mesh, shape (num_x, num_y, 3). Each crosswise cut at x is p4 scaled by x/L."""
     A0, A1, A2 = 0.175798, -0.251730, 0.175798
     semispan = 0.21893                                     # Star-CCM+ X(t) = 0.21893 - 0.437861 t
 
@@ -22,6 +25,7 @@ def cst_mesh(num_x=7, num_y=15, L=1.0):
         mesh[i, :, 2] = scale * z
     return mesh
 
+
 def build_problem():
     mesh = cst_mesh()
     twist_cp = np.zeros(2)
@@ -34,12 +38,11 @@ def build_problem():
         "thickness_cp": np.array([0.002, 0.003]),
         "twist_cp": twist_cp,
         "mesh": mesh,
-
         "CL0": 0.0,
         "CD0": 0.015,
         "k_lam": 0.05,
         "t_over_c_cp": np.array([0.15]),  # thickness over chord ratio (NACA0015)
-        "c_max_t": 0.303,  # chordwise location of maximum (NACA0015)
+        "c_max_t": 0.303,
         "with_viscous": True,
         "with_wave": False,
         # Structural values are based on aluminum 7075
@@ -52,9 +55,9 @@ def build_problem():
         "wing_weight_ratio": 2.0,
         "struct_weight_relief": False,
         "distributed_fuel_weight": False,
+        # Constraints
         "exact_failure_constraint": False,
     }
-
     prob = om.Problem(reports=False)
 
     indep_var_comp = om.IndepVarComp()
@@ -71,8 +74,8 @@ def build_problem():
     indep_var_comp.add_output("empty_cg", val=np.zeros((3)), units="m")
 
     prob.model.add_subsystem("prob_vars", indep_var_comp, promotes=["*"])
-    aerostruct_group = AerostructGeometry(surface=surface)
 
+    aerostruct_group = AerostructGeometry(surface=surface)
     name = "wing"
     prob.model.add_subsystem(name, aerostruct_group)
     point_name = "AS_point_0"
@@ -97,7 +100,8 @@ def build_problem():
     )
 
     com_name = point_name + "." + name + "_perf"
-    prob.model.connect(name + ".local_stiff_transformed", point_name + ".coupled." + name + ".local_stiff_transformed")
+    prob.model.connect(
+        name + ".local_stiff_transformed", point_name + ".coupled." + name + ".local_stiff_transformed")
     prob.model.connect(name + ".nodes", point_name + ".coupled." + name + ".nodes")
     prob.model.connect(name + ".mesh", point_name + ".coupled." + name + ".mesh")
     prob.model.connect(name + ".radius", com_name + ".radius")
@@ -111,11 +115,9 @@ def build_problem():
 
     return prob
 
-
 if __name__ == "__main__":
     solvers = {
         "NLBGS": lambda: om.NonlinearBlockGS(use_aitken=False),
-        "NLBGS + Aitken": lambda: om.NonlinearBlockGS(use_aitken=True),  # OAS default
         "Newton": lambda: om.NewtonSolver(solve_subsystems=True),
     }
 
@@ -127,7 +129,6 @@ if __name__ == "__main__":
         coupled.nonlinear_solver.options["maxiter"] = 100
         coupled.nonlinear_solver.options["atol"] = 1e-10
         coupled.nonlinear_solver.options["rtol"] = 1e-30
-
         coupled.nonlinear_solver.recording_options["record_abs_error"] = True
         recorder = om.SqliteRecorder(f"{label}.sql")
         coupled.nonlinear_solver.add_recorder(recorder)
@@ -139,18 +140,17 @@ if __name__ == "__main__":
         res = [c.abs_err for k, c in enumerate(cases) if k == 0 or not c.name.endswith("Newton_subsolve|0")]
         plt.semilogy(range(1, len(res) + 1), res, marker="o", label=label)
 
-        print(f"{label}:  CL = {prob.get_val('AS_point_0.wing_perf.CL')[0]:.5f}   "
-              f"CD = {prob.get_val('AS_point_0.wing_perf.CD')[0]:.5f}   "
-              f"tip deflection = {1e3 * prob.get_val('AS_point_0.coupled.wing.disp')[0, 2]:.4f} mm")
+        CL = prob.get_val("AS_point_0.wing_perf.CL")[0]
+        CD = prob.get_val("AS_point_0.wing_perf.CD")[0]
+        print(f"{label}:  L/D = {CL / CD:.5f}")
 
     om.n2(prob, outfile="n2_oas_waverider.html", show_browser=False)
 
-    plt.axhline(1e-10, color="gray", ls="--", lw=0.8, label="atol = 1e-10")
     plt.xlabel("Nonlinear iteration")
     plt.ylabel("Absolute residual norm")
-    plt.title("OpenAeroStruct waverider (CST p4): aerostructural convergence")
+    plt.title("OpenAeroStruct Waverider: Aerostructural Convergence")
     plt.grid(True, which="both", alpha=0.3)
-    plt.xticks(range(1, 7))
+    plt.xticks(range(1, 6))
     plt.legend()
     plt.tight_layout()
     plt.savefig("convergence_oas_waverider.png", dpi=150)
